@@ -304,3 +304,58 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, 0.4); }
   cursor: pointer;
 }
 .swatch.on { border-color: var(--text); }
+
+/* ---- Ergänzungen: Tipp, Verlauf, Filter, Budgets ---- */
+.tip {
+  font-size: 14px;
+  color: var(--muted);
+  min-height: 20px;
+}
+.bar-inner > div { cursor: pointer; }
+.row.tap, .cat.tap { cursor: pointer; }
+.filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.filters .input { margin: 0; flex: 1; min-width: 0; }
+select.input { max-width: 45%; }
+
+.hist {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  background: var(--card);
+  border-radius: 16px;
+  padding: 12px 8px 8px;
+  overflow-x: auto;
+}
+.hist-col {
+  flex: 1;
+  min-width: 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.hist-col.current { opacity: 1; }
+.hist-col.current .hist-label { font-weight: 700; color: var(--text); }
+.hist-bars {
+  height: 120px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+}
+.hbar {
+  width: 8px;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+}
+.hist-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
