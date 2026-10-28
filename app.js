@@ -3,14 +3,21 @@
 // ---------- Konstanten ----------
 
 const STORAGE_KEY = 'ausgaben-web-v1';
+const SYNC_KEY = 'ausgaben-sync-v1';
+const TABLES = ['categories', 'entries', 'recurring'];
 const COLORS = ['#66BB6A', '#42A5F5', '#FFA726', '#AB47BC', '#EF5350', '#26C6DA', '#8D6E63', '#78909C', '#FFEE58', '#5C6BC0'];
 const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 const eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
 
-// ---------- Daten ----------
-// Beträge werden in Cent gespeichert (ganze Zahlen), Datum als "JJJJ-MM-TT", Monat als "JJJJ-MM".
+// ---------- IDs und Datenformat ----------
+// Beträge in Cent, Datum "JJJJ-MM-TT", Monat "JJJJ-MM".
+// Jeder Datensatz hat eine eindeutige ID, einen Zeitstempel (updatedAt),
+// ein deleted-Flag (Löschen per Markierung) und _dirty (noch nicht hochgeladen).
 
-function seedState() {
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+const isUid = id => typeof id === 'string' && (id.length >= 20 || id.startsWith('seed-'));
+
+function seedData() {
   const defaults = [
     ['Lebensmittel', 'expense', '#66BB6A'],
     ['Wohnen', 'expense', '#42A5F5'],
@@ -21,38 +28,183 @@ function seedState() {
     ['Gehalt 1', 'income', '#26C6DA'],
     ['Gehalt 2', 'income', '#5C6BC0'],
   ];
+  // Feste IDs, damit beide Handys dieselben Startkategorien haben und sie nicht doppelt entstehen.
   return {
-    nextId: 100,
-    categories: defaults.map(([name, kind, color], i) => ({ id: i + 1, name, kind, color })),
+    categories: defaults.map(([name, kind, color], i) => ({ id: 'seed-' + (i + 1), name, kind, color })),
     entries: [],
     recurring: [],
   };
 }
 
+/** Bringt Daten aus älteren Versionen (numerische IDs) auf das neue Format. */
+function normalize(data, forceDirty) {
+  const now = Date.now();
+  const catMap = new Map();
+  const out = { categories: [], entries: [], recurring: [] };
+
+  for (const t of TABLES) {
+    for (const r of (data[t] || [])) {
+      const reassigned = !isUid(r.id);
+      let id = r.id;
+      if (reassigned) {
+        const oldNum = Number(r.id);
+        id = (t === 'categories' && oldNum >= 1 && oldNum <= 8) ? 'seed-' + oldNum : uid();
+        if (t === 'categories') catMap.set(String(r.id), id);
+      }
+      out[t].push({
+        ...r,
+        id,
+        deleted: !!r.deleted,
+        updatedAt: Number(r.updatedAt) || now,
+        _dirty: !!forceDirty || reassigned || r._dirty === true,
+      });
+    }
+  }
+  for (const t of ['entries', 'recurring']) {
+    for (const r of out[t]) {
+      if (catMap.has(String(r.categoryId))) r.categoryId = catMap.get(String(r.categoryId));
+    }
+  }
+  return out;
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) return normalize(JSON.parse(raw), false);
   } catch (e) {
     // Speicher nicht lesbar: mit Startdaten weitermachen
   }
-  return seedState();
+  return normalize(seedData(), true);
 }
 
 let state = loadState();
 
-function persist() {
+const live = table => state[table].filter(r => !r.deleted);
+const catById = id => live('categories').find(c => c.id === id);
+const findRec = (table, id) => state[table].find(r => r.id === id);
+
+function saveLocal() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
     alert('Die Daten konnten nicht gespeichert werden. Ist der Speicher des Browsers voll oder blockiert?');
   }
-  render();
 }
 
-function newId() {
-  state.nextId += 1;
-  return state.nextId;
+/** Nach jeder Änderung: lokal speichern, anzeigen, Synchronisation anstoßen. */
+function persist() {
+  saveLocal();
+  render();
+  scheduleSync();
+}
+
+function add(table, fields) {
+  state[table].push({ id: uid(), ...fields, deleted: false, updatedAt: Date.now(), _dirty: true });
+  persist();
+}
+
+function remove(table, id) {
+  const rec = findRec(table, id);
+  if (!rec) return;
+  rec.deleted = true;
+  rec.updatedAt = Date.now();
+  rec._dirty = true;
+  persist();
+}
+
+// ---------- Synchronisation ----------
+
+let sync = loadSync();
+let syncMsg = sync.url ? 'Nicht synchronisiert' : 'Keine Verbindung eingerichtet';
+let syncTimer = null;
+let syncing = false;
+
+function loadSync() {
+  try {
+    return JSON.parse(localStorage.getItem(SYNC_KEY)) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveSync() {
+  try {
+    localStorage.setItem(SYNC_KEY, JSON.stringify(sync));
+  } catch (e) { /* ignorieren */ }
+}
+
+function setStatus(msg) {
+  syncMsg = msg;
+  const node = document.getElementById('sync-status');
+  if (node) node.textContent = msg;
+}
+
+function scheduleSync() {
+  if (!sync.url || !sync.token) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(runSync, 1500);
+}
+
+/** Nutzdaten eines Datensatzes ohne interne Felder. */
+function payload(r) {
+  const { _dirty, id, updatedAt, deleted, ...data } = r;
+  return data;
+}
+
+/** Übernimmt einen Datensatz vom Server, außer lokal gibt es eine neuere ungesendete Änderung. */
+function mergeIncoming(ch) {
+  if (!TABLES.includes(ch.table)) return;
+  const local = findRec(ch.table, ch.id);
+  if (local) {
+    if (local._dirty && local.updatedAt >= ch.updatedAt) return;
+    Object.assign(local, ch.data, { updatedAt: ch.updatedAt, deleted: ch.deleted, _dirty: false });
+  } else {
+    state[ch.table].push({ ...ch.data, id: ch.id, updatedAt: ch.updatedAt, deleted: ch.deleted, _dirty: false });
+  }
+}
+
+async function runSync() {
+  if (!sync.url || !sync.token || syncing) return;
+  if (!navigator.onLine) {
+    setStatus('Offline. Die Synchronisation läuft, sobald wieder Verbindung besteht.');
+    return;
+  }
+  syncing = true;
+  setStatus('Synchronisiere …');
+  try {
+    const changes = [];
+    for (const t of TABLES) {
+      for (const r of state[t]) {
+        if (r._dirty) changes.push({ table: t, id: r.id, data: payload(r), updatedAt: r.updatedAt, deleted: !!r.deleted });
+      }
+    }
+
+    const res = await fetch(sync.url.replace(/\/+$/, '') + '/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sync.token },
+      body: JSON.stringify({ since: sync.seq || 0, changes }),
+    });
+    if (res.status === 401) throw new Error('Schlüssel falsch');
+    if (!res.ok) throw new Error('Server antwortet mit ' + res.status);
+    const body = await res.json();
+
+    // Gesendete Änderungen gelten nur als erledigt, wenn sie sich seitdem nicht verändert haben.
+    for (const c of changes) {
+      const rec = findRec(c.table, c.id);
+      if (rec && rec.updatedAt === c.updatedAt) rec._dirty = false;
+    }
+    body.changes.forEach(mergeIncoming);
+    sync.seq = body.seq;
+    saveSync();
+    saveLocal();
+    setStatus('Zuletzt synchronisiert: ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }));
+    if (body.changes.length > 0) render();
+  } catch (e) {
+    setStatus('Sync fehlgeschlagen: ' + e.message);
+  } finally {
+    syncing = false;
+  }
 }
 
 // ---------- Zeit und Format ----------
@@ -71,7 +223,6 @@ const daysIn = ym => {
 const dateIn = (ym, day) => `${ym}-${pad(Math.min(day, daysIn(ym)))}`;
 const money = cents => eur.format(cents / 100);
 const sum = list => list.reduce((s, x) => s + x.cents, 0);
-const catById = id => state.categories.find(c => c.id === id);
 
 let currentYm = todayYm();
 let tab = 'overview';
@@ -84,12 +235,12 @@ function parseCents(text) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
 }
 
-/** Alle Buchungen eines Monats. Fixkosten werden hier für jeden Monat ab Startmonat erzeugt. */
+/** Alle Buchungen eines Monats. Fixkosten werden für jeden Monat ab Startmonat erzeugt. */
 function monthEntries(ym) {
-  const tx = state.entries
+  const tx = live('entries')
     .filter(e => e.date.startsWith(ym))
     .map(e => ({ id: e.id, fixed: false, kind: e.kind, amount: e.amount, categoryId: e.categoryId, note: e.note, date: e.date }));
-  const fixed = state.recurring
+  const fixed = live('recurring')
     .filter(r => r.startYm <= ym)
     .map(r => ({ id: r.id, fixed: true, kind: r.kind, amount: r.amount, categoryId: r.categoryId, note: r.note, date: dateIn(ym, r.day) }));
   return [...tx, ...fixed].sort((a, b) => b.date.localeCompare(a.date));
@@ -226,13 +377,10 @@ function entryRow(e) {
       el('div', {}, cat ? cat.name : 'Ohne Kategorie'),
       el('div', { class: 'muted small' }, details)),
     el('div', { class: inc ? 'pos' : 'neg' }, (inc ? '+' : '−') + money(e.amount)),
-    e.fixed ? null : el('button', { class: 'icon', 'aria-label': 'Löschen', onclick: () => deleteEntry(e) }, '🗑'));
-}
-
-function deleteEntry(e) {
-  if (!confirm('Buchung löschen?')) return;
-  state.entries = state.entries.filter(x => x.id !== e.id);
-  persist();
+    e.fixed ? null : el('button', {
+      class: 'icon', 'aria-label': 'Löschen',
+      onclick: () => { if (confirm('Buchung löschen?')) remove('entries', e.id); },
+    }, '🗑'));
 }
 
 function viewFixed() {
@@ -240,8 +388,8 @@ function viewFixed() {
     el('h2', {}, 'Fixe Buchungen'),
     el('p', { class: 'muted small' },
       'Erscheinen jeden Monat ab dem Startmonat automatisch. Neue Fixkosten legst du mit dem + an und setzt den Haken bei „Fixkosten“.'),
-    state.recurring.length ? null : el('p', {}, 'Noch keine Fixkosten angelegt.'),
-    ...state.recurring.map(r => {
+    live('recurring').length ? null : el('p', {}, 'Noch keine Fixkosten angelegt.'),
+    ...live('recurring').map(r => {
       const cat = catById(r.categoryId);
       const [y, m] = r.startYm.split('-');
       const inc = r.kind === 'income';
@@ -255,16 +403,45 @@ function viewFixed() {
         el('button', {
           class: 'icon', 'aria-label': 'Fixkosten löschen',
           onclick: () => {
-            if (!confirm('Diese Fixkosten dauerhaft entfernen?')) return;
-            state.recurring = state.recurring.filter(x => x.id !== r.id);
-            persist();
+            if (confirm('Diese Fixkosten dauerhaft entfernen?')) remove('recurring', r.id);
           },
         }, '🗑'));
     }));
 }
 
+function syncSection() {
+  const urlInput = el('input', { class: 'input', type: 'url', placeholder: 'https://ausgaben.deine-domain.de', value: sync.url || '', autocomplete: 'off' });
+  const tokenInput = el('input', { class: 'input', type: 'password', placeholder: 'Gemeinsamer Schlüssel', value: sync.token || '', autocomplete: 'off' });
+  return el('div', {},
+    el('h3', {}, 'Synchronisation'),
+    el('p', { class: 'muted small' },
+      'Adresse des Servers und der gemeinsame Schlüssel. Auf beiden Handys gleich eintragen.'),
+    urlInput,
+    tokenInput,
+    el('div', { class: 'row-buttons' },
+      el('button', {
+        onclick: () => {
+          const prevUrl = sync.url;
+          sync.url = urlInput.value.trim();
+          sync.token = tokenInput.value.trim();
+          if (sync.url !== prevUrl) sync.seq = 0;
+          saveSync();
+          runSync();
+        },
+      }, 'Speichern und synchronisieren'),
+      el('button', {
+        onclick: () => {
+          sync = {};
+          saveSync();
+          setStatus('Keine Verbindung eingerichtet');
+          render();
+        },
+      }, 'Trennen')),
+    el('p', { id: 'sync-status', class: 'muted small' }, syncMsg));
+}
+
 function viewCategories() {
-  const sorted = [...state.categories].sort((a, b) =>
+  const sorted = [...live('categories')].sort((a, b) =>
     a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name, 'de'));
   return el('div', {},
     el('button', { class: 'primary wide', onclick: openAddCategory }, 'Neue Kategorie oder Einnahmequelle'),
@@ -276,14 +453,12 @@ function viewCategories() {
       el('button', {
         class: 'icon', 'aria-label': 'Kategorie löschen',
         onclick: () => {
-          if (!confirm(`„${c.name}“ löschen? Vorhandene Buchungen verlieren dann den Namen.`)) return;
-          state.categories = state.categories.filter(x => x.id !== c.id);
-          persist();
+          if (confirm(`„${c.name}“ löschen? Vorhandene Buchungen verlieren dann den Namen.`)) remove('categories', c.id);
         },
       }, '🗑'))),
+    syncSection(),
     el('h3', {}, 'Daten sichern'),
-    el('p', { class: 'muted small' },
-      'Die Daten liegen nur in diesem Browser. Mit „Exportieren“ speicherst du eine Sicherungsdatei.'),
+    el('p', { class: 'muted small' }, 'Sicherungsdatei zum Speichern oder Wiederherstellen.'),
     el('div', { class: 'row-buttons' },
       el('button', { onclick: exportData }, 'Exportieren'),
       el('button', { onclick: () => importInput.click() }, 'Importieren')));
@@ -314,7 +489,7 @@ function kindToggle(initial, onChange) {
     onChange(v);
   }
   paint();
-  return { node: el('div', { class: 'seg' }, expBtn, incBtn), get value() { return value; } };
+  return { node: el('div', { class: 'seg' }, expBtn, incBtn) };
 }
 
 /** Farbauswahl aus der Palette. */
@@ -331,7 +506,7 @@ function swatches(initial, onChange) {
     })));
   }
   paint();
-  return { node, get value() { return value; } };
+  return { node };
 }
 
 function openAddEntry() {
@@ -346,7 +521,7 @@ function openAddEntry() {
   const saveBtn = el('button', { type: 'button', class: 'primary' }, 'Speichern');
 
   function drawChips() {
-    chips.replaceChildren(...state.categories
+    chips.replaceChildren(...live('categories')
       .filter(c => c.kind === kind)
       .map(c => el('button', {
         type: 'button',
@@ -372,13 +547,12 @@ function openAddEntry() {
   saveBtn.addEventListener('click', () => {
     const cents = parseCents(amountInput.value);
     const note = noteInput.value.trim();
-    if (fixed) {
-      state.recurring.push({ id: newId(), kind, amount: cents, categoryId, day: todayDay(), startYm: currentYm, note });
-    } else {
-      state.entries.push({ id: newId(), kind, amount: cents, categoryId, date: dateIn(currentYm, todayDay()), note });
-    }
     dlg.close();
-    persist();
+    if (fixed) {
+      add('recurring', { kind, amount: cents, categoryId, day: todayDay(), startYm: currentYm, note });
+    } else {
+      add('entries', { kind, amount: cents, categoryId, date: dateIn(currentYm, todayDay()), note });
+    }
   });
 
   const dlg = el('dialog', { class: 'sheet' },
@@ -415,9 +589,9 @@ function openAddCategory() {
   }
   nameInput.addEventListener('input', validate);
   saveBtn.addEventListener('click', () => {
-    state.categories.push({ id: newId(), name: nameInput.value.trim(), kind, color });
+    const name = nameInput.value.trim();
     dlg.close();
-    persist();
+    add('categories', { name, kind, color });
   });
 
   const dlg = el('dialog', { class: 'sheet' },
@@ -459,8 +633,7 @@ async function importData(event) {
       throw new Error('ungültiges Format');
     }
     if (!confirm('Die aktuellen Daten werden durch die Sicherung ersetzt. Fortfahren?')) return;
-    data.nextId = Number(data.nextId) || 1000;
-    state = data;
+    state = normalize(data, true);
     persist();
   } catch (e) {
     alert('Die Datei passt nicht zur App.');
@@ -481,8 +654,13 @@ function init() {
   document.body.append(importInput);
   render();
 
+  window.addEventListener('online', runSync);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) runSync(); });
+  setInterval(() => { if (!document.hidden) runSync(); }, 60000);
+  runSync();
+
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline-Betrieb ist optional */ });
+    navigator.serviceWorker.register('sw.js').catch(() => { /* Offline-Betrieb ist optional */ });
   }
 }
 
