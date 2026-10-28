@@ -1,6 +1,6 @@
 // Speichert die App-Dateien, damit sie auch ohne Internet startet.
 // Bei Änderungen an den Dateien diese Versionsnummer erhöhen, sonst sieht das Handy die alte Version.
-const CACHE = 'ausgaben-web-v2';
+const CACHE = 'ausgaben-web-v3';
 const FILES = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {
