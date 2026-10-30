@@ -7,7 +7,25 @@ const SYNC_KEY = 'ausgaben-sync-v1';
 const THEME_KEY = 'ausgaben-theme';
 const STATEMENT_KEY = 'ausgaben-statements-v1';
 const TABLES = ['categories', 'entries', 'recurring', 'accounts', 'balances', 'loans', 'rules'];
-const COLORS = ['#66BB6A', '#42A5F5', '#FFA726', '#AB47BC', '#EF5350', '#26C6DA', '#8D6E63', '#78909C', '#FFEE58', '#5C6BC0'];
+const COLORS = [
+  '#FFFFFF', '#E0E0E0', '#BDBDBD', '#757575', '#212121',
+  '#E57373', '#EF5350', '#F44336', '#D32F2F', '#B71C1C',
+  '#F06292', '#EC407A', '#E91E63', '#C2185B', '#880E4F',
+  '#BA68C8', '#AB47BC', '#9C27B0', '#7B1FA2', '#4A148C',
+  '#7986CB', '#5C6BC0', '#3F51B5', '#303F9F', '#1A237E',
+  '#64B5F6', '#42A5F5', '#2196F3', '#1976D2', '#0D47A1',
+  '#4DD0E1', '#26C6DA', '#00BCD4', '#0097A7', '#006064',
+  '#4DB6AC', '#26A69A', '#009688', '#00796B', '#004D40',
+  '#81C784', '#66BB6A', '#4CAF50', '#388E3C', '#1B5E20',
+  '#DCE775', '#D4E157', '#CDDC39', '#AFB42B', '#827717',
+  '#FFF176', '#FFEE58', '#FFEB3B', '#FBC02D', '#F57F17',
+  '#FFB74D', '#FFA726', '#FF9800', '#F57C00', '#E65100',
+  '#A1887F', '#8D6E63', '#795548', '#5D4037', '#3E2723',
+  '#90A4AE', '#78909C', '#607D8B', '#455A64', '#263238',
+];
+const ICONS = ['🏠', '💡', '💧', '🗑️', '🧹', '🔧', '🌳', '🚿', '🛒', '🥖', '🍽️', '☕', '🍺', '🛍️', '🧴', '💊',
+  '🏥', '👕', '👶', '🧸', '🏫', '🎒', '🚗', '⛽', '🚌', '✈️', '🎮', '🎬', '🎵', '🏋️', '📚', '🎁', '💇', '🐶',
+  '📱', '🌐', '🛡️', '🏦', '🔌', '❤️', '⭐', '💰', '📦', '🧾'];
 const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 const ACCOUNT_TYPES = { giro: 'Girokonto', tagesgeld: 'Tagesgeld', depot: 'Depot', bargeld: 'Bargeld' };
 const METHOD_LABELS = { card: 'Karte', cash: 'Bar', transfer: 'Überweisung' };
@@ -376,7 +394,9 @@ function el(tag, props, ...children) {
 }
 
 function dot(cat, color) {
-  return el('span', { class: 'dot', style: { background: color || (cat ? cat.color : '#9E9E9E') } });
+  const bg = color || (cat ? cat.color : '#9E9E9E');
+  if (cat && cat.icon) return el('span', { class: 'dot ico', style: { background: bg } }, cat.icon);
+  return el('span', { class: 'dot', style: { background: bg } });
 }
 
 function monthNav() {
@@ -443,8 +463,7 @@ function viewOverview() {
       el('div', { class: 'bar-label' }, el('span', {}, 'Ausgaben'), el('strong', {}, money(expT))),
       bar(exp, max),
       el('div', { class: 'tip' }, tipText || 'Tippe auf ein Segment, um den Betrag zu sehen.'),
-      el('div', { class: 'rest ' + (rest >= 0 ? 'pos' : 'neg') }, `Übrig: ${money(rest)}`),
-      legend('Einnahmen', inc)),
+      el('div', { class: 'rest ' + (rest >= 0 ? 'pos' : 'neg') }, `Übrig: ${money(rest)}`)),
     el('div', { class: 'big' }, money(expT)),
     el('div', { class: 'muted' }, 'Ausgaben in diesem Monat'),
     ...exp.map(s => catRow(s, expT)),
@@ -1164,10 +1183,31 @@ function openEntryDialog(existing, presetFixed) {
 }
 
 /** Kategorie anlegen oder bearbeiten (cat = bestehende Kategorie oder null). */
+/** Auswahl-Popup mit Raster. Ausgegraut = schon von einer anderen Kategorie benutzt. */
+function openPickerDialog(title, options, selected, used, onPick) {
+  const dlg = el('dialog', { class: 'sheet picker' },
+    el('h2', {}, title),
+    el('div', { class: 'pick-grid' }, ...options.map(o => el('button', {
+      type: 'button',
+      class: 'pick' + (o.icon ? ' icon-pick' : '') + (o.value === selected ? ' on' : '') + (used.has(o.value) && o.value !== selected ? ' used' : ''),
+      style: o.style || {},
+      onclick: () => { dlg.close(); onPick(o.value); },
+    }, o.label))),
+    el('p', { class: 'muted small' }, 'Ausgegraut: schon von einer anderen Kategorie benutzt. Du kannst sie trotzdem wählen.'),
+    el('div', { class: 'actions' },
+      el('button', { type: 'button', onclick: () => dlg.close() }, 'Abbrechen')));
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
 function openCategoryDialog(cat) {
   const isEdit = !!cat;
   let kind = cat ? cat.kind : 'expense';
   let color = cat ? cat.color : COLORS[0];
+  let icon = cat && cat.icon ? cat.icon : '';
+  const usedColors = new Set(live('categories').filter(c => !cat || c.id !== cat.id).map(c => c.color));
+  const usedIcons = new Set(live('categories').filter(c => (!cat || c.id !== cat.id) && c.icon).map(c => c.icon));
 
   const nameInput = field({ type: 'text', placeholder: 'Name', value: cat ? cat.name : '' });
   const budgetInput = field({ type: 'text', inputmode: 'decimal', placeholder: 'Monatsbudget in € (optional)', value: cat && cat.budget ? centsToInput(cat.budget) : '' });
@@ -1177,15 +1217,32 @@ function openCategoryDialog(cat) {
 
   function paintPreview() {
     preview.replaceChildren(
-      el('span', { class: 'dot big-dot', style: { background: color } }),
+      el('span', { class: 'dot big-dot' + (icon ? ' ico' : ''), style: { background: color } }, icon),
       el('span', {}, nameInput.value.trim() || 'Vorschau'));
   }
+
+  const colorBtn = el('button', { type: 'button', class: 'pickbtn' });
+  const iconBtn = el('button', { type: 'button', class: 'pickbtn' });
+  function paintButtons() {
+    colorBtn.replaceChildren(
+      el('span', { class: 'ico-badge', style: { background: color } }),
+      ' Farbe ändern');
+    iconBtn.replaceChildren(
+      el('span', { class: 'ico-badge', style: { background: color } }, icon || ''),
+      icon ? ' Icon ändern' : ' Icon wählen');
+  }
+  colorBtn.addEventListener('click', () => openPickerDialog('Wähle eine Farbe',
+    COLORS.map(c => ({ value: c, style: { background: c } })), color, usedColors,
+    c => { color = c; paintButtons(); paintPreview(); }));
+  iconBtn.addEventListener('click', () => openPickerDialog('Symbol ändern',
+    [{ value: '', label: '–', icon: true }, ...ICONS.map(i => ({ value: i, label: i, icon: true }))],
+    icon, usedIcons,
+    i => { icon = i; paintButtons(); paintPreview(); }));
 
   const toggle = kindToggle(kind, v => {
     kind = v;
     budgetRow.hidden = v === 'income';
   });
-  const sw = swatches(color, c => { color = c; paintPreview(); });
 
   function validate() {
     saveBtn.disabled = nameInput.value.trim() === '';
@@ -1198,6 +1255,7 @@ function openCategoryDialog(cat) {
       name: nameInput.value.trim(),
       kind,
       color,
+      icon: icon || null,
       budget: kind === 'expense' && b > 0 ? b : null,
     };
     dlg.close();
@@ -1210,8 +1268,9 @@ function openCategoryDialog(cat) {
     toggle.node,
     nameInput,
     budgetRow,
-    el('div', { class: 'label' }, 'Farbe'),
-    sw.node,
+    el('div', { class: 'label' }, 'Farbe und Icon'),
+    colorBtn,
+    iconBtn,
     preview,
     el('div', { class: 'actions' },
       el('button', { type: 'button', onclick: () => dlg.close() }, 'Abbrechen'),
@@ -1220,6 +1279,7 @@ function openCategoryDialog(cat) {
   dlg.addEventListener('close', () => dlg.remove());
   document.body.append(dlg);
   budgetRow.hidden = kind === 'income';
+  paintButtons();
   validate();
   dlg.showModal();
   nameInput.focus();
@@ -1318,7 +1378,7 @@ function parseLoan(text) {
   return { saldo, tilg, zins, periodYm: deDate(start[1]).slice(0, 7) };
 }
 
-const groupKeyOf = r => (r.partner || r.text).toLowerCase();
+const groupKeyOf = r => (r.partner || r.text).toLowerCase() + (r.cents < 0 ? '|out' : '|in');
 
 /** Differenz in Tagen zwischen zwei ISO-Datums (YYYY-MM-DD). */
 function dayDiff(a, b) {
@@ -1326,6 +1386,9 @@ function dayDiff(a, b) {
 }
 
 function openImportReview(parsed, fileName, raw) {
+  if (!live('categories').some(c => c.name === 'Erstattungen' && c.kind === 'income')) {
+    state.categories.push({ id: uid(), name: 'Erstattungen', kind: 'income', color: '#9CCC65', budget: null, deleted: false, updatedAt: Date.now(), _dirty: true });
+  }
   const ownIbans = new Set(live('accounts').map(a => a.iban).filter(Boolean));
   ownIbans.add(parsed.iban);
   const existingKeys = new Set(live('entries').map(e => e.importKey).filter(Boolean));
@@ -1348,8 +1411,10 @@ function openImportReview(parsed, fileName, raw) {
     if (r.counterIban && ownIbans.has(r.counterIban)) { items.push({ r, key, type: 'transfer' }); continue; }
 
     const hay = (r.partner + ' ' + r.text).toLowerCase();
-    const rule = live('rules').find(x => hay.includes(x.match));
-    if (rule) {
+    const sign = r.cents < 0 ? 'expense' : 'income';
+    const rule = live('rules').find(x => hay.includes(x.match) && (!x.sign || x.sign === sign));
+    const ruleCat = rule ? live('categories').find(c => c.id === rule.target) : null;
+    if (rule && (rule.target === 'transfer' || (ruleCat && ruleCat.kind === sign))) {
       items.push({ r, key, type: rule.target === 'transfer' ? 'transfer' : 'auto', target: rule.target });
       continue;
     }
@@ -1367,6 +1432,10 @@ function openImportReview(parsed, fileName, raw) {
     g.count++;
     g.cents += it.r.cents;
   }
+  const erstattung = live('categories').find(c => c.name === 'Erstattungen' && c.kind === 'income');
+  for (const g of groups.values()) {
+    if (!g.expense && erstattung && /amazon/i.test(g.label)) g.decision = erstattung.id;
+  }
 
   const count = t => items.filter(i => i.type === t).length;
   const summary = el('p', { class: 'muted small' },
@@ -1381,6 +1450,7 @@ function openImportReview(parsed, fileName, raw) {
         .filter(c => c.kind === (g.expense ? 'expense' : 'income'))
         .sort((a, b) => a.name.localeCompare(b.name, 'de'))
         .map(c => el('option', { value: c.id }, c.name)));
+    sel.value = g.decision;
     sel.addEventListener('change', () => { g.decision = sel.value; validate(); });
     const recCb = el('input', { type: 'checkbox' });
     recCb.addEventListener('change', () => { g.recurring = recCb.checked; });
@@ -1520,9 +1590,10 @@ function commitImport(ctx) {
     for (const g of groups.values()) {
       if (!g.decision || g.decision === 'skip') continue;
       const match = g.label.toLowerCase();
-      if (live('rules').some(x => x.match === match)) continue;
+      const sign = g.expense ? 'expense' : 'income';
+      if (live('rules').some(x => x.match === match && x.sign === sign)) continue;
       state.rules.push({
-        id: uid(), match, target: g.decision,
+        id: uid(), match, target: g.decision, sign,
         deleted: false, updatedAt: Date.now(), _dirty: true,
       });
     }

@@ -372,7 +372,15 @@ select.input { max-width: 45%; }
 }
 .row.compact, .cat.compact { padding: 7px 0; gap: 10px; }
 .row-title { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.big-dot { display: inline-block; }
+.big-dot {
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
 .big-small { font-size: 26px; font-weight: 600; }
 .row.compact > input.bal {
   flex: none;
@@ -449,3 +457,76 @@ dialog.sheet.wide { width: min(640px, 96vw); }
 }
 .gear.active { color: var(--accent); }
 main { padding-top: 56px; }
+
+/* Farb- und Icon-Auswahl */
+.dot.ico {
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.pickbtn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  margin: 6px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.ico-badge {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  color: #fff;
+  flex: none;
+}
+.pick-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px 12px;
+  margin: 10px 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+dialog.sheet.picker { max-height: 88vh; overflow: hidden; }
+dialog.sheet.picker h2 { font-weight: 500; }
+.pick.icon-pick {
+  aspect-ratio: auto;
+  height: 52px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 30px;
+}
+.pick.icon-pick.on { background: var(--line); border-radius: 12px; }
+.pick {
+  aspect-ratio: 1;
+  width: 100%;
+  min-width: 0;
+  border: 3px solid transparent;
+  border-radius: 50%;
+  padding: 0;
+  color: #fff;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.pick.on { border-color: var(--text); }
+.pick.used { opacity: 0.3; }
