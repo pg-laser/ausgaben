@@ -985,7 +985,7 @@ function render() {
   const node = views[tab]();
   const banner = tab === 'overview' ? reminderNode() : null;
   main.replaceChildren(...(banner ? [banner, node] : [node]));
-  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('nav button, .gear').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.getElementById('fab').hidden = !['overview', 'history', 'fixed'].includes(tab);
 }
 
@@ -1324,12 +1324,18 @@ function openImportReview(parsed, fileName, raw) {
   const ownIbans = new Set(live('accounts').map(a => a.iban).filter(Boolean));
   ownIbans.add(parsed.iban);
   const existingKeys = new Set(live('entries').map(e => e.importKey).filter(Boolean));
+  // Manuell erfasste Buchungen (ohne importKey), die noch keinem Umsatz zugeordnet sind
+  const manualFree = live('entries').filter(e => !e.importKey);
+  const claimed = new Set();
 
   const items = [];
   let already = 0;
   for (const r of parsed.rows) {
     const key = [r.date, r.cents, r.counterIban, r.text].join('|');
     if (existingKeys.has(key)) { already++; continue; }
+
+    const match = manualFree.find(e => !claimed.has(e.id) && e.date === r.date && e.amount === Math.abs(r.cents));
+    if (match) { claimed.add(match.id); items.push({ r, key, type: 'linked', entry: match }); already++; continue; }
 
     const loan = r.text.includes('Tilg.:') ? parseLoan(r.text) : null;
     if (loan) { items.push({ r, key, type: 'loan', loan }); continue; }
@@ -1359,7 +1365,7 @@ function openImportReview(parsed, fileName, raw) {
 
   const count = t => items.filter(i => i.type === t).length;
   const summary = el('p', { class: 'muted small' },
-    `${count('auto')} automatisch zugeordnet · ${count('transfer')} Umbuchungen · ${count('loan')} Kredit-Raten · ${already} schon importiert`);
+    `${count('auto')} automatisch zugeordnet · ${count('transfer')} Umbuchungen · ${count('loan')} Kredit-Raten · ${count('linked')} schon manuell erfasst (verknüpft) · ${already - count('linked')} schon importiert`);
 
   const groupRows = [...groups.values()].map(g => {
     const sel = el('select', { class: 'input', ...LOCK },
@@ -1426,6 +1432,13 @@ function commitImport(ctx) {
   let transfers = 0;
   for (const it of items) {
     const r = it.r;
+    if (it.type === 'linked') {
+      // Manuelle Buchung wird mit dem Umsatz verknüpft, damit sie nicht doppelt entsteht
+      it.entry.importKey = it.key;
+      it.entry._dirty = true;
+      it.entry.updatedAt = Date.now();
+      continue;
+    }
     let kind;
     let categoryId = null;
     let note = r.text.slice(0, 120);
@@ -1594,7 +1607,7 @@ const csvInput = el('input', { type: 'file', accept: '.csv,text/csv', hidden: tr
 function init() {
   try { applyTheme(localStorage.getItem(THEME_KEY) || 'auto'); } catch (e) { /* Standard */ }
 
-  document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('nav button, .gear').forEach(b => b.addEventListener('click', () => {
     tab = b.dataset.tab;
     tipText = '';
     render();
