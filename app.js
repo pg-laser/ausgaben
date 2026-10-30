@@ -1320,6 +1320,11 @@ function parseLoan(text) {
 
 const groupKeyOf = r => (r.partner || r.text).toLowerCase();
 
+/** Differenz in Tagen zwischen zwei ISO-Datums (YYYY-MM-DD). */
+function dayDiff(a, b) {
+  return (Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 86400000;
+}
+
 function openImportReview(parsed, fileName, raw) {
   const ownIbans = new Set(live('accounts').map(a => a.iban).filter(Boolean));
   ownIbans.add(parsed.iban);
@@ -1334,7 +1339,7 @@ function openImportReview(parsed, fileName, raw) {
     const key = [r.date, r.cents, r.counterIban, r.text].join('|');
     if (existingKeys.has(key)) { already++; continue; }
 
-    const match = manualFree.find(e => !claimed.has(e.id) && e.date === r.date && e.amount === Math.abs(r.cents));
+    const match = manualFree.find(e => !claimed.has(e.id) && e.amount === Math.abs(r.cents) && Math.abs(dayDiff(e.date, r.date)) <= 3);
     if (match) { claimed.add(match.id); items.push({ r, key, type: 'linked', entry: match }); already++; continue; }
 
     const loan = r.text.includes('Tilg.:') ? parseLoan(r.text) : null;
@@ -1356,7 +1361,7 @@ function openImportReview(parsed, fileName, raw) {
   for (const it of items.filter(i => i.type === 'open')) {
     const gk = groupKeyOf(it.r);
     if (!groups.has(gk)) {
-      groups.set(gk, { key: gk, label: it.r.partner || it.r.text, count: 0, cents: 0, expense: it.r.cents < 0, decision: '' });
+      groups.set(gk, { key: gk, label: it.r.partner || it.r.text, count: 0, cents: 0, expense: it.r.cents < 0, decision: '', recurring: false });
     }
     const g = groups.get(gk);
     g.count++;
@@ -1377,10 +1382,13 @@ function openImportReview(parsed, fileName, raw) {
         .sort((a, b) => a.name.localeCompare(b.name, 'de'))
         .map(c => el('option', { value: c.id }, c.name)));
     sel.addEventListener('change', () => { g.decision = sel.value; validate(); });
+    const recCb = el('input', { type: 'checkbox' });
+    recCb.addEventListener('change', () => { g.recurring = recCb.checked; });
     return el('div', { class: 'row compact' },
       el('div', { class: 'grow' },
         el('div', { class: 'row-title' }, g.label),
-        el('div', { class: 'muted small' }, `${g.count}× · ${money(g.cents)}`)),
+        el('div', { class: 'muted small' }, `${g.count}× · ${money(g.cents)}`),
+        el('label', { class: 'small' }, recCb, ' monatlich wiederkehrend (als Fixkosten anlegen)')),
       sel);
   });
 
@@ -1518,6 +1526,22 @@ function commitImport(ctx) {
         deleted: false, updatedAt: Date.now(), _dirty: true,
       });
     }
+  }
+
+  // Wiederkehrende Kosten: als Fixkosten ab dem Monat nach dem letzten Posten anlegen
+  for (const g of groups.values()) {
+    if (!g.recurring || !g.decision || g.decision === 'skip' || g.decision === 'transfer') continue;
+    const last = items.filter(i => i.type === 'open' && groupKeyOf(i.r) === g.key)
+      .map(i => i.r).sort((x, y) => y.date.localeCompare(x.date))[0];
+    if (!last) continue;
+    const [yy, mm] = last.date.slice(0, 7).split('-').map(Number);
+    const startYm = mm === 12 ? `${yy + 1}-01` : `${yy}-${String(mm + 1).padStart(2, '0')}`;
+    state.recurring.push({
+      id: uid(), kind: last.cents < 0 ? 'expense' : 'income', amount: Math.abs(last.cents),
+      categoryId: g.decision, method: last.text.startsWith('VISA') ? 'card' : 'transfer',
+      day: Number(last.date.slice(8, 10)), startYm, endYm: null, note: g.label,
+      deleted: false, updatedAt: Date.now(), _dirty: true,
+    });
   }
 
   statements.unshift({

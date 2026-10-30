@@ -1,6 +1,6 @@
 // Holt die App-Dateien zuerst aus dem Netz und nimmt den Zwischenspeicher nur,
 // wenn kein Netz da ist. So sieht das Handy Änderungen sofort.
-const CACHE = 'ausgaben-web-v5';
+const CACHE = 'ausgaben-web-v7';
 const FILES = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {
